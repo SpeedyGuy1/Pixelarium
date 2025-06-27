@@ -1,4 +1,4 @@
-# pixelarium.py v3 with material rules, temp system, and UI hooks
+# pixelarium.py v4 with dynamic resize, material rules, temp system, and UI hooks
 
 import pygame
 import numpy as np
@@ -34,8 +34,6 @@ class Pixelarium:
         self.width = width
         self.height = height
         self.cell_size = cell_size
-        self.grid_w = width // cell_size
-        self.grid_h = height // cell_size
         self.states = states
         self.fps = fps
 
@@ -43,9 +41,9 @@ class Pixelarium:
         pygame.display.set_caption(title)
         self.clock = pygame.time.Clock()
 
-        self.grid = np.zeros((self.grid_h, self.grid_w), dtype=np.uint8)
-        self.temp_grid = np.zeros_like(self.grid, dtype=np.float32)  # temperature support
-        self.age_grid = np.zeros_like(self.grid, dtype=np.uint8)
+        self.zoom = 1.0
+        self.offset_x = 0
+        self.offset_y = 0
 
         self.color_map = palette or [
             (0, 0, 0),
@@ -54,12 +52,11 @@ class Pixelarium:
         ]
         self.max_age = 15
 
+        self.palette = self.color_map
+        self.tools = tools or []
+
         self.birth = [3]
         self.survival = [2, 3]
-
-        self.zoom = 1.0
-        self.offset_x = 0
-        self.offset_y = 0
 
         self.undo_stack = []
         self.redo_stack = []
@@ -78,11 +75,17 @@ class Pixelarium:
         self.running = True
 
         self.update_func = update_func or self.update_default
-        self.palette = self.color_map
-        self.tools = tools or []
 
-        # Material behavior dictionary
         self.material_behaviors = {}
+
+        self.resize_grids()
+
+    def resize_grids(self):
+        self.grid_w = self.screen.get_width() // self.cell_size
+        self.grid_h = self.screen.get_height() // self.cell_size
+        self.grid = np.zeros((self.grid_h, self.grid_w), dtype=np.uint8)
+        self.temp_grid = np.zeros_like(self.grid, dtype=np.float32)
+        self.age_grid = np.zeros_like(self.grid, dtype=np.uint8)
 
     def register_material(self, value, color, behavior=None):
         self.color_map.append(color)
@@ -97,12 +100,12 @@ class Pixelarium:
                     self.material_behaviors[val](grid, x, y)
 
     def in_bounds(self, x, y):
-        return 0 <= x < self.grid_w and 0 <= y < self.grid_h
+        return 0 <= x < self.grid.shape[1] and 0 <= y < self.grid.shape[0]
 
     def draw_grid(self):
         self.screen.fill((0,0,0))
-        for y in range(self.grid_h):
-            for x in range(self.grid_w):
+        for y in range(self.grid.shape[0]):
+            for x in range(self.grid.shape[1]):
                 state = self.grid[y,x]
                 if state == 0:
                     continue
@@ -120,7 +123,7 @@ class Pixelarium:
 
     def draw_hud(self):
         lines = [
-            f"Pixelarium v3 | FPS: {int(self.clock.get_fps())} | Zoom: {self.zoom:.2f}",
+            f"Pixelarium v4 | FPS: {int(self.clock.get_fps())} | Zoom: {self.zoom:.2f}",
             f"Draw state: {self.draw_state} | Mouse drag: {'ON' if self.mouse_drawing else 'OFF'}",
             "Q=Quit R=Reset +/- Zoom Mouse=Draw Z=Undo Y=Redo",
             "S=Save L=Load M=ToggleSound Arrows=Pan"
@@ -144,6 +147,9 @@ class Pixelarium:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
+            elif event.type == pygame.VIDEORESIZE:
+                self.screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
+                self.resize_grids()
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_q:
                     self.running = False
@@ -173,6 +179,11 @@ class Pixelarium:
                     self.offset_x += 20
                 elif event.key == pygame.K_RIGHT:
                     self.offset_x -= 20
+                elif event.key == pygame.K_LEFTBRACKET:
+                    brush_size = max(1, brush_size - 1)
+                elif event.key == pygame.K_RIGHTBRACKET:
+                     brush_size = min(15, brush_size + 1)
+
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:
                     self.mouse_drawing = True
@@ -204,8 +215,8 @@ class Pixelarium:
 
     def save_grid(self, filename="pixelarium_save.json"):
         data = {
-            "width": self.grid_w,
-            "height": self.grid_h,
+            "width": self.grid.shape[1],
+            "height": self.grid.shape[0],
             "states": self.states,
             "grid": self.grid.tolist()
         }
@@ -219,7 +230,7 @@ class Pixelarium:
             return
         with open(filename, "r") as f:
             data = json.load(f)
-        if data["width"] != self.grid_w or data["height"] != self.grid_h:
+        if data["width"] != self.grid.shape[1] or data["height"] != self.grid.shape[0]:
             print("Save grid size does not match current grid size.")
             return
         self.grid = np.array(data["grid"], dtype=np.uint8)
